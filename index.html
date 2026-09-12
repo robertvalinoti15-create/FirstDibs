@@ -331,12 +331,7 @@
           <div class="field"><input id="liPass" type="password" placeholder="Password" autocomplete="current-password" required></div>
           <button class="btn primary" type="submit" style="width:100%;justify-content:center;margin-top:18px;padding:12px">Log in</button>
         </form>
-        <div class="divider">or</div>
-        <div class="oauth">
-          <button class="btn ghost" id="oauthGoogle" type="button"><span class="gmark">G</span> Continue with Google</button>
-          <button class="btn ghost" id="oauthEdu" type="button">🎓 Continue with school email</button>
-        </div>
-        <p class="fine">By continuing you agree to our <a href="#">Terms</a> &amp; <a href="#">Privacy Policy</a>.</p>
+        <p class="fine">By continuing you agree to our <a href="/terms.html" target="_blank">Terms</a> &amp; <a href="/privacy.html" target="_blank">Privacy Policy</a>.</p>
       </div>
     </div>
   </div>
@@ -692,7 +687,7 @@
 <footer>
   <div class="wrap">
     <span class="note">Live roles pulled straight from company career pages via <b>Greenhouse · Lever · Ashby</b>. Refreshed every few minutes.</span>
-    <span>Firstdibs — be first to apply.</span>
+    <span>Firstdibs — be first to apply. · <a href="/privacy.html" style="color:var(--muted)">Privacy</a> · <a href="/terms.html" style="color:var(--muted)">Terms</a></span>
   </div>
 </footer>
 </div><!-- /#app -->
@@ -733,11 +728,33 @@
 
 <div class="toast" id="toast"><span id="toastIcon"></span><span id="toastMsg"></span></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
 "use strict";
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const store={get(k,d){try{const v=localStorage.getItem('fd_'+k);return v==null?d:JSON.parse(v)}catch(e){return d}},
   set(k,v){try{localStorage.setItem('fd_'+k,JSON.stringify(v))}catch(e){}}};
+
+/* ---- Supabase (real accounts + alerts). Falls back to local-only if not configured. ---- */
+let SB=null, SBSESSION=null;
+async function initSB(){
+  try{
+    const c=await fetch('/api/config').then(r=>r.json());
+    if(c && c.supabaseUrl && c.supabaseAnonKey && window.supabase){
+      SB=window.supabase.createClient(c.supabaseUrl,c.supabaseAnonKey);
+    }
+  }catch(e){ SB=null; }
+}
+async function saveProfileRow(profile){
+  if(!SB||!SBSESSION) return;
+  try{ await SB.from('profiles').upsert({user_id:SBSESSION.user.id, profile, updated_at:new Date().toISOString()}); }catch(e){}
+}
+async function saveAlertRow(){
+  if(!SB||!SBSESSION) return;
+  const a=store.get('alert',null)||{};
+  try{ await SB.from('alerts').upsert({user_id:SBSESSION.user.id, email:SBSESSION.user.email,
+    kw:a.kw||'', level:a.level||'any', loc:a.loc||'', remote:!!a.remote, active:true}); }catch(e){}
+}
 
 /* ---- theme ---- */
 (function(){const saved=store.get('theme',null);if(saved)document.documentElement.setAttribute('data-theme',saved);})();
@@ -779,6 +796,16 @@ let alert=store.get('alert',null);
 let applied=store.get('applied',[]);
 let appliedFilter="all";
 const isApplied=j=>applied.some(a=>a.key===j.company+"|"+j.title);
+const jkey=j=>j.company+"|"+j.title;
+async function sbSaveAdd(key,job){ if(!SB||!SBSESSION)return; try{ await SB.from('saved').upsert({user_id:SBSESSION.user.id,job_key:key,job}); }catch(e){} }
+async function sbSaveRemove(key){ if(!SB||!SBSESSION)return; try{ await SB.from('saved').delete().eq('user_id',SBSESSION.user.id).eq('job_key',key); }catch(e){} }
+async function sbAppUpsert(a){ if(!SB||!SBSESSION)return; try{ await SB.from('applications').upsert({user_id:SBSESSION.user.id,key:a.key,data:a,updated_at:new Date().toISOString()}); }catch(e){} }
+async function sbAppRemove(key){ if(!SB||!SBSESSION)return; try{ await SB.from('applications').delete().eq('user_id',SBSESSION.user.id).eq('key',key); }catch(e){} }
+async function loadUserData(){
+  if(!SB||!SBSESSION)return;
+  try{ const {data}=await SB.from('saved').select('job_key').eq('user_id',SBSESSION.user.id); if(data){ saved=new Set(data.map(r=>r.job_key)); store.set('saved',[...saved]); } }catch(e){}
+  try{ const {data}=await SB.from('applications').select('data').eq('user_id',SBSESSION.user.id); if(data){ applied=data.map(r=>r.data).filter(Boolean); store.set('applied',applied); } }catch(e){}
+}
 
 /* ---- relative time ---- */
 function rel(ts){const s=Math.max(1,Math.round((Date.now()-ts)/1000));
@@ -787,7 +814,7 @@ function rel(ts){const s=Math.max(1,Math.round((Date.now()-ts)/1000));
 
 /* ---- filter ---- */
 function matches(j){
-  if(state.sort==="saved" && !saved.has(j.id))return false;
+  if(state.sort==="saved" && !saved.has(jkey(j)))return false;
   if(state.level!=="all" && j.level!==state.level)return false;
   if(state.cat!=="all" && j.cat!==state.cat)return false;
   if(state.remote && !j.remote)return false;
@@ -834,8 +861,8 @@ function render(){
       <div class="side">
         <div class="stamp ${fresh?"new":""}">${fresh?'<span class="pulse"></span>':""}${rel(j.posted)}</div>
         <div class="acts">
-          <button class="save" data-id="${j.id}" aria-pressed="${saved.has(j.id)}" aria-label="Save job">
-            <svg viewBox="0 0 24 24" fill="${saved.has(j.id)?'currentColor':'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+          <button class="save" data-key="${jkey(j)}" aria-pressed="${saved.has(jkey(j))}" aria-label="Save job">
+            <svg viewBox="0 0 24 24" fill="${saved.has(jkey(j))?'currentColor':'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
           </button>
           <a class="apply" href="${j.url}" target="_blank" rel="noopener" data-id="${j.id}">Apply
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M8 7h9v9"/></svg>
@@ -894,11 +921,12 @@ $('#feed').onclick=e=>{
     if(tr && !tr.querySelector('.applied-tag')){const t=document.createElement('span');t.className='tag applied-tag';t.textContent='✓ Applied';tr.appendChild(t);}
     return; }
   const s=e.target.closest('.save');if(!s)return;
-  const id=+s.dataset.id;if(saved.has(id))saved.delete(id);else saved.add(id);
+  const k=s.dataset.key, was=saved.has(k);
+  if(was){saved.delete(k);sbSaveRemove(k);}else{saved.add(k);sbSaveAdd(k,jobs.find(x=>jkey(x)===k)||{});}
   store.set('saved',[...saved]);
   if(state.sort==="saved")render();
-  else{s.setAttribute('aria-pressed',saved.has(id));const svg=s.querySelector('svg');svg.setAttribute('fill',saved.has(id)?'currentColor':'none');}
-  toast(saved.has(id)?"Saved to your list":"Removed from saved","check");};
+  else{s.setAttribute('aria-pressed',saved.has(k));const svg=s.querySelector('svg');svg.setAttribute('fill',saved.has(k)?'currentColor':'none');}
+  toast(saved.has(k)?"Saved to your list":"Removed from saved","check");};
 
 /* ---- modal ---- */
 const overlay=$('#overlay');
@@ -913,9 +941,8 @@ $('#aLevel').onclick=e=>{const b=e.target.closest('.chip');if(!b)return;
 $('#saveAlert').onclick=()=>{
   const lvlBtn=$('#aLevel .chip[aria-pressed="true"]');
   alert={kw:$('#aKw').value.trim(),level:lvlBtn?lvlBtn.dataset.alevel:"any",loc:$('#aLoc').value.trim(),remote:$('#aRemote').checked};
-  store.set('alert',alert);renderAlert();closeModal();
-  toast("Alert on — watching for matches…","bell");
-  scheduleDrop();
+  store.set('alert',alert);renderAlert();closeModal();saveAlertRow();
+  toast(SB&&SBSESSION?"Alert on — we'll email you new matches":"Alert on — watching for matches…","bell");
 };
 
 /* alerts: preferences saved locally; email delivery is the next milestone */
@@ -961,6 +988,7 @@ function enterApp(u,p){
   if(p)applyProfile(p);
   $('.eyebrow').textContent = u ? `Welcome, ${first} — new roles picked for you` : "New listings, the minute they go live";
   renderAlert();render();window.scrollTo(0,0);
+  if(SB&&SBSESSION){ loadUserData().then(()=>{ updateBadge(); render(); if(!$('#view-applied').hidden) renderApplied(); }); }
 }
 
 /* tabs */
@@ -971,14 +999,30 @@ $('#authTabs').onclick=e=>{const b=e.target.closest('button');if(!b)return;
   $('#authTitle').textContent=signup?"Create your account":"Welcome back";
   $('#authLead').textContent=signup?"Set it up once. We'll watch the feeds for you.":"Log in to see what's new for you.";};
 
-$('#signupForm').onsubmit=e=>{e.preventDefault();
-  const user={name:$('#suName').value.trim()||"You",email:$('#suEmail').value.trim()};
+$('#signupForm').onsubmit=async e=>{e.preventDefault();
+  const name=$('#suName').value.trim()||"You", email=$('#suEmail').value.trim(), pass=$('#suPass').value;
+  if(SB){
+    const {data,error}=await SB.auth.signUp({email,password:pass,options:{data:{name}}});
+    if(error){ toast(error.message||"Sign-up failed","check"); return; }
+    SBSESSION=data.session||null; store.set('user',{name,email});
+    if(!SBSESSION){ toast("Check your email to confirm, then log in","check"); return; }
+    startOnboard({name,email}); return;
+  }
+  const user={name,email};
   store.set('user',user);store.set('loggedIn',true);startOnboard(user);};
-$('#loginForm').onsubmit=e=>{e.preventDefault();
-  const user=store.get('user',null)||{name:"You",email:$('#liEmail').value.trim()};
+$('#loginForm').onsubmit=async e=>{e.preventDefault();
+  const email=$('#liEmail').value.trim(), pass=$('#liPass').value;
+  if(SB){
+    const {data,error}=await SB.auth.signInWithPassword({email,password:pass});
+    if(error){ toast(error.message||"Login failed","check"); return; }
+    SBSESSION=data.session;
+    const name=(data.user.user_metadata&&data.user.user_metadata.name)||email;
+    let p=store.get('profile',null);
+    try{ const {data:pr}=await SB.from('profiles').select('profile').eq('user_id',data.user.id).single(); if(pr&&pr.profile) p=pr.profile; }catch(err){}
+    enterApp({name,email},p);toast("Welcome back!","check"); return;
+  }
+  const user=store.get('user',null)||{name:"You",email};
   store.set('loggedIn',true);enterApp(user,store.get('profile',null));toast("Welcome back!","check");};
-$('#oauthGoogle').onclick=()=>{const user={name:"Alex Rivera",email:"alex.rivera@gmail.com"};store.set('user',user);store.set('loggedIn',true);startOnboard(user);};
-$('#oauthEdu').onclick=()=>{const user={name:"Jordan Lee",email:"jlee@university.edu"};store.set('user',user);store.set('loggedIn',true);startOnboard(user);};
 
 /* onboarding wizard */
 let onb={step:0,fields:[],level:"Internship",loc:"",remote:false,notify:["Email"],freq:"Instant"};
@@ -1010,14 +1054,17 @@ function finishOnb(){
   onb.loc=$('#obLoc').value.trim()||onb.loc;
   const profile={fields:onb.fields,level:onb.level,loc:onb.loc,remote:onb.remote,notify:onb.notify,freq:onb.freq};
   store.set('profile',profile);
+  if(!SB) store.set('loggedIn',true);
+  saveProfileRow(profile);
+  alert={kw:(profile.fields||[]).join(', '),level:profile.level||'any',loc:profile.loc||'',remote:!!profile.remote};
+  store.set('alert',alert);saveAlertRow();
   enterApp(store.get('user',{name:"You",email:""}),profile);
-  toast("You're all set — your alert is live","bell",true);
-  scheduleDrop();}
+  toast(SB&&SBSESSION?"You're all set — we'll email you new matches":"You're all set — your alert is live","bell",true);}
 
 /* user menu */
 $('#userBtn').onclick=e=>{e.stopPropagation();const d=$('#udrop');d.hidden=!d.hidden;};
 document.addEventListener('click',e=>{if(!e.target.closest('#userMenu'))$('#udrop').hidden=true;});
-$('#logoutBtn').onclick=()=>{store.set('loggedIn',false);$('#udrop').hidden=true;showGate();};
+$('#logoutBtn').onclick=async ()=>{ if(SB){ try{await SB.auth.signOut();}catch(e){} SBSESSION=null; } store.set('loggedIn',false);$('#udrop').hidden=true;showGate();};
 
 /* ---- tab navigation ---- */
 $('#nav').onclick=e=>{const b=e.target.closest('button');if(!b)return;
@@ -1034,8 +1081,9 @@ const statusColor={"Applied":"var(--muted)","Under review":"#C4820A","Interview"
 function updateBadge(){const n=applied.filter(a=>!a.seen).length,b=$('#appliedBadge');b.textContent=n;b.hidden=n===0;}
 function markApplied(id){const j=jobs.find(x=>x.id===id);if(!j)return;
   const key=j.company+"|"+j.title;if(applied.some(a=>a.key===key))return;
-  applied.unshift({key,company:j.company,title:j.title,location:j.location,cat:j.cat,ats:j.ats,appliedAt:Date.now(),status:"Applied",events:[{status:"Applied",ts:Date.now()}],seen:true});
-  store.set('applied',applied);updateBadge();toast("Nice — added to Applied Jobs","check");}
+  const a={key,company:j.company,title:j.title,location:j.location,cat:j.cat,ats:j.ats,appliedAt:Date.now(),status:"Applied",events:[{status:"Applied",ts:Date.now()}],seen:true};
+  applied.unshift(a);
+  store.set('applied',applied);updateBadge();sbAppUpsert(a);toast("Nice — added to Applied Jobs","check");}
 function seedApplied(){}
 function progressBar(a){
   if(a.status==="Rejected"){const reached=a.events.filter(e=>e.status!=="Rejected").length;
@@ -1075,9 +1123,9 @@ $('#aFilter').onclick=e=>{const b=e.target.closest('.chip');if(!b)return;
   $$('#aFilter .chip').forEach(c=>c.setAttribute('aria-pressed',c===b));appliedFilter=b.dataset.af;renderApplied();};
 $('#alist').onchange=e=>{const sel=e.target.closest('.statusSel');if(!sel)return;
   const a=applied.find(x=>x.key===sel.dataset.key);if(!a||sel.value===a.status)return;
-  a.status=sel.value;a.events.push({status:sel.value,ts:Date.now()});a.seen=true;store.set('applied',applied);renderApplied();updateBadge();};
+  a.status=sel.value;a.events.push({status:sel.value,ts:Date.now()});a.seen=true;store.set('applied',applied);sbAppUpsert(a);renderApplied();updateBadge();};
 $('#alist').onclick=e=>{const rm=e.target.closest('.rm');if(!rm)return;
-  applied=applied.filter(a=>a.key!==rm.dataset.key);store.set('applied',applied);renderApplied();updateBadge();toast("Removed from tracker","check");};
+  const key=rm.dataset.key;applied=applied.filter(a=>a.key!==key);store.set('applied',applied);sbAppRemove(key);renderApplied();updateBadge();toast("Removed from tracker","check");};
 $('#checkUpdates').onclick=()=>{ toast("Update your statuses manually for now — automatic updates arrive with email alerts","check"); };
 
 /* ---- resume studio ---- */
@@ -1197,7 +1245,24 @@ seedApplied();updateBadge();
 renderAlert();render();loadJobs();
 $('#resumeText').value=SAMPLE_RESUME;
 $('#rresult').innerHTML=emptyMsg("Your AI feedback will appear here. Click “Review my resume” to start.");
-(function boot(){const u=store.get('user',null);
+(async function boot(){
+  await initSB();
+  if(SB){
+    try{
+      const {data}=await SB.auth.getSession();
+      if(data && data.session){
+        SBSESSION=data.session;
+        const su=data.session.user;
+        const u={name:(su.user_metadata&&su.user_metadata.name)||su.email, email:su.email};
+        let p=store.get('profile',null);
+        try{ const {data:pr}=await SB.from('profiles').select('profile').eq('user_id',su.id).single(); if(pr&&pr.profile) p=pr.profile; }catch(e){}
+        enterApp(u,p); return;
+      }
+    }catch(e){}
+    showGate(); return;
+  }
+  const u=store.get('user',null);
   if(u&&store.get('loggedIn',false))enterApp(u,store.get('profile',null));
-  else showGate();})();
+  else showGate();
+})();
 </script>
